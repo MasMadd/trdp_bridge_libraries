@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel", "cffi>=1.16"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trdp-py"
+version = "0.1.0"
+description = "Python wrapper for TCNOpen TRDP Light (PD + MD + statistics)"
+requires-python = ">=3.9"
+dependencies = ["cffi>=1.16"]
+
+[tool.setuptools]
+packages = ["trdp_py"]
+
+[tool.setuptools.package-data]
+trdp_py = ["py.typed"]
