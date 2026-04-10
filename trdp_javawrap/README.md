@@ -985,3 +985,142 @@ public class TrdpDemo {
     }
 }
 ```
+
+---
+
+---
+
+## Testing
+
+### Running the tests
+
+```bash
+# Unit tests only (no native library needed)
+mvn test
+
+# Unit + integration tests (requires libtrdp on the system)
+mvn verify -Pintegration-test -Dtrdp.native.lib=/path/to/dir/containing/libtrdp.so
+```
+
+### Test structure
+
+```
+src/test/java/io/trdp/
+├── template/          ← unit tests — run always, no native library required
+│   ├── TrdpSerializerTest.java
+│   ├── TrdpDeserializerTest.java
+│   ├── TrdpPublisherTest.java
+│   ├── TrdpSubscriberTest.java
+│   ├── TrdpTemplateBuilderTest.java
+│   └── TrdpMdTemplateTest.java
+└── integration/       ← integration tests — skipped if libtrdp is not found
+    └── TrdpPdLoopbackIT.java
+```
+
+`TrdpSession` is mocked in all unit tests (Mockito creates a proxy bypassing the
+native constructor), so no shared library is needed to run them.
+
+---
+
+### Unit tests
+
+#### `TrdpSerializerTest` / `TrdpDeserializerTest`
+
+Pure-Java tests with no mocking.
+
+| What is tested | Expected behaviour |
+|---|---|
+| `TrdpSerializer.bytes()` on a non-null array | Returns the same array instance (identity, no copy) |
+| `TrdpSerializer.bytes()` on `null` | Returns an empty `byte[]` |
+| `TrdpSerializer.string()` on an ASCII string | Produces the correct UTF-8 byte sequence |
+| `TrdpSerializer.string()` on a multi-byte character (e.g. `café`) | Encodes correctly as UTF-8 |
+| `TrdpSerializer.string()` on `null` / empty | Returns an empty `byte[]` |
+| `TrdpSerializer.string(Charset)` | Uses the specified charset |
+| Custom lambda serializer | The lambda is invoked with the value and the result is correct |
+| Round-trip `serialize` → `deserialize` | Recovers the original value unchanged |
+| `TrdpDeserializer.bytes()` on `null` | Passes `null` through without throwing |
+| `TrdpDeserializer.string()` on `null` / empty bytes | Returns an empty `String` |
+
+#### `TrdpPublisherTest`
+
+Mocks `TrdpSession`; verifies that `TrdpPublisher` correctly delegates to it.
+
+| What is tested | Expected behaviour |
+|---|---|
+| `send(value)` | Serializes the value and calls `session.put(handle, bytes)` |
+| `send(value)` with a custom serializer | Uses the provided serializer, not the default |
+| `sendImmediate(value)` | Calls `session.putImmediate(handle, bytes)` |
+| `send()` / `sendImmediate()` after `close()` | Throws `IllegalStateException` |
+| `close()` | Calls `session.unpublish(handle)` exactly once |
+| `close()` called twice | `session.unpublish` is invoked only once (idempotent) |
+| Use in `try-with-resources` | `session.unpublish` is called on exit |
+
+#### `TrdpSubscriberTest`
+
+Mocks `TrdpSession` and `PdInfo`; verifies `TrdpSubscriber` delegation and deserialization.
+
+| What is tested | Expected behaviour |
+|---|---|
+| `poll()` when session returns `null` | Returns `null` (no data yet) |
+| `poll()` when session returns a packet | Deserializes `byte[]` and returns the typed value |
+| `poll()` with a custom deserializer | Uses the provided deserializer |
+| `receive()` when no data | Returns `Optional.empty()` |
+| `receive()` when data present | Returns `Optional` with the `PdInfo` metadata and deserialized value |
+| `poll()` / `receive()` after `close()` | Throws `IllegalStateException` |
+| `close()` | Calls `session.unsubscribe(handle)` exactly once |
+| `close()` called twice | `session.unsubscribe` is invoked only once (idempotent) |
+
+#### `TrdpTemplateBuilderTest`
+
+Verifies the builder validation rules and the wiring between builder options and the underlying `TrdpSession` calls.
+
+| What is tested | Expected behaviour |
+|---|---|
+| `TrdpTemplate.builder().build()` without `ownIp` | Throws `NullPointerException` |
+| `close()` on a template wrapping an external session | Does **not** call `session.close()` |
+| `start()` | Calls `session.startProcessingThread(pollPeriodMs)` |
+| `stop()` | Calls `session.stopProcessingThread()` |
+| `PublisherBuilder.register()` without `dest()` | Throws `NullPointerException` |
+| `PublisherBuilder.register()` without interval | Throws `IllegalStateException` |
+| `intervalMs(100)` | Passed to `session.publish` as `100_000` µs |
+| `initialValue(T)` | The serialized bytes are passed to `session.publish` |
+| `SubscriberBuilder.register()` | Passes the correct arguments to `session.subscribe` |
+| `timeoutMs(200)` | Passed to `session.subscribe` as `200_000` µs |
+| `keepLastOnTimeout()` | Passes `TO_KEEP_LAST_VALUE` to `session.subscribe` |
+| `onMessage(callback)` | Wraps the raw `byte[]` callback with deserialization; the user callback receives the typed value |
+
+#### `TrdpMdTemplateTest`
+
+Verifies MD delegation, the `CompletableFuture` contract, and listener lifecycle.
+
+| What is tested | Expected behaviour |
+|---|---|
+| `notify(comId, destIp, data)` | Calls `session.mdNotify` with the raw bytes and a `null` callback |
+| `notify(…, value, serializer)` | Serializes the value before delegating |
+| `asyncRequest` — reply arrives in time | `CompletableFuture` completes with the reply payload |
+| `asyncRequest` — callback invoked twice | Future captures only the **first** reply; subsequent calls are no-ops |
+| `asyncRequest` — no reply within timeout | Future completes exceptionally with `TimeoutException` (message contains the timeout value) |
+| Typed `asyncRequest<REQ, REP>` | Request is serialized; reply is deserialized before completing the future |
+| `reply(sessionId, comId, data)` | Calls `session.mdReply` |
+| `reply(…, value, serializer)` | Serializes before delegating |
+| Typed `addListener` | Incoming bytes are deserialized before the user callback is invoked |
+| `addListener` return value | Returns an `MdListenerHandle` that calls `session.mdDelListener` on `close()` |
+| `MdListenerHandle.close()` called twice | `session.mdDelListener` invoked only once (idempotent) |
+| `MdListenerHandle` in `try-with-resources` | Listener is removed on block exit |
+
+---
+
+### Integration test
+
+#### `TrdpPdLoopbackIT`
+
+Requires `libtrdp` installed. Uses `127.0.0.1` (loopback), so no physical network
+or multicast routing is needed. All tests are skipped (not failed) when the library
+is absent.
+
+| Test | What it verifies |
+|---|---|
+| `sessionLifecycle` | `TrdpTemplate` opens and closes a session without throwing — the native library initialises and tears down cleanly |
+| `publishThenReceive` | A string value published with `initialValue()` is read back by `poll()` / `receive()` after one cycle; `PdInfo.srcIp` and `comId` are correct |
+| `putUpdatesPayload` | After calling `send("updated")`, the subscriber's next `poll()` returns the new value (not the stale one) |
+| `onMessageCallback` | The push-style `onMessage` callback is invoked at least 3 times with the expected deserialized string within 2 seconds |

@@ -18,14 +18,38 @@
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jna.version>5.14.0</jna.version>
+        <!-- test dependency versions -->
+        <junit.version>5.10.2</junit.version>
+        <mockito.version>5.11.0</mockito.version>
+        <assertj.version>3.25.3</assertj.version>
     </properties>
 
     <dependencies>
-        <!-- JNA core -->
+        <!-- ── Runtime ──────────────────────────────────────────────────────── -->
         <dependency>
             <groupId>net.java.dev.jna</groupId>
             <artifactId>jna</artifactId>
             <version>${jna.version}</version>
+        </dependency>
+
+        <!-- ── Test ─────────────────────────────────────────────────────────── -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -47,6 +71,62 @@
                     </execution>
                 </executions>
             </plugin>
+
+            <!--
+                Surefire — unit tests only.
+                Integration tests tagged with "integration" are excluded here
+                and run separately via Failsafe (see the `integration-test` profile).
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <excludedGroups>integration</excludedGroups>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
+
+    <!-- ── Integration-test profile ────────────────────────────────────────── -->
+    <!--
+        Run with:  mvn verify -Pintegration-test -Dtrdp.native.lib=/path/to/libtrdp.so
+        This profile activates Failsafe to execute @Tag("integration") tests.
+        The native library path is forwarded as a system property so tests can
+        locate it via System.getProperty("trdp.native.lib").
+    -->
+    <profiles>
+        <profile>
+            <id>integration-test</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>3.2.5</version>
+                        <configuration>
+                            <groups>integration</groups>
+                            <!-- forward the native-lib path to the JVM running tests -->
+                            <systemPropertyVariables>
+                                <trdp.native.lib>${trdp.native.lib}</trdp.native.lib>
+                                <jna.library.path>${trdp.native.lib}</jna.library.path>
+                            </systemPropertyVariables>
+                            <includes>
+                                <include>**/*IT.java</include>
+                                <include>**/*IntegrationTest.java</include>
+                            </includes>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
