@@ -19,11 +19,178 @@ Two API levels are available:
 | Java       | 11+     |
 | JNA        | 5.14.0  |
 | Maven      | 3.6+    |
-| libtrdp    | 3.0.0.0 (shared or static-turned-shared) |
+| libtrdp    | 3.0.0.0 (shared library — see below) |
 
 ---
 
-## Building
+## Building the native TRDP library
+
+JNA loads a **shared library** at runtime (`libtrdp.so` on Linux, `libtrdp.dylib` on
+macOS, `trdp.dll` on Windows). The TRDP source ships under `TRDP/3.0.0.0/` and its
+Makefile produces a static archive by default; an extra link step is needed to wrap it
+into a shared library on POSIX systems. The full procedure is described below for each
+supported OS.
+
+> The source tree already contains pre-selected configuration files under
+> `TRDP/3.0.0.0/config/`. All commands below are run from inside `TRDP/3.0.0.0/`.
+
+---
+
+### Linux (x86-64)
+
+**Prerequisites:** `gcc`, `make`, `libuuid-dev` (Ubuntu/Debian) or `libuuid-devel` (RHEL/Fedora).
+
+```bash
+# 1. Select the target configuration (copies it to config/config.mk)
+make LINUX_X86_64_config
+
+# 2. Build the static library + object files
+make libtrdp
+
+# 3. Wrap the objects into a shared library (JNA requires .so)
+gcc -shared -fPIC -o bld/output/linux-x86_64-rel/libtrdp.so \
+    bld/output/linux-x86_64-rel/*.o \
+    -lrt -luuid -lpthread
+
+# 4. (Optional) install system-wide
+sudo cp bld/output/linux-x86_64-rel/libtrdp.so /usr/local/lib/
+sudo ldconfig
+```
+
+To enable **MD support** (required for `TrdpMdTemplate`), verify that the config file
+contains `MD_SUPPORT = 1` — the `LINUX_X86_64_config` preset already has it enabled.
+
+To build a **debug** variant add `DEBUG=TRUE` to the make invocation:
+
+```bash
+make DEBUG=TRUE libtrdp
+```
+
+The debug output lands in `bld/output/linux-x86_64-dbg/`.
+
+**Alternative configs for Linux:**
+
+| Config file | Use case |
+|---|---|
+| `LINUX_X86_64_config` | Standard 64-bit Linux |
+| `LINUX_X86_config` | 32-bit Linux |
+| `LINUX_X86_64_HP_config` | High-performance indexed mode (base 10) |
+| `CENTOS_X86_64_config` | CentOS / RHEL 64-bit |
+| `RASPIAN_config` | Raspberry Pi (ARM) |
+
+---
+
+### macOS
+
+**Prerequisites:** Xcode Command Line Tools (`xcode-select --install`).
+No `libuuid` is needed — the OS provides it via `<uuid/uuid.h>`.
+
+```bash
+# 1. Select the macOS config
+make OSX_X86_64_config
+
+# 2. Build
+make libtrdp
+
+# 3. Link a shared library (JNA requires .dylib)
+gcc -dynamiclib -fPIC -o bld/output/osx_x86_64-rel/libtrdp.dylib \
+    bld/output/osx_x86_64-rel/*.o \
+    -lpthread
+
+# 4. (Optional) install
+sudo cp bld/output/osx_x86_64-rel/libtrdp.dylib /usr/local/lib/
+```
+
+**Apple Silicon (M1/M2/M3):** the shipped configs target `x86_64` and pass `-m64`.
+On Apple Silicon you can either run under Rosetta 2 (transparent if your JDK is also
+`x86_64`) or create a new config file based on `OSX_X86_64_config` removing `-m64`
+and changing `ARCH = osx_arm64`:
+
+```bash
+cp config/OSX_X86_64_config config/OSX_ARM64_config
+# edit OSX_ARM64_config: remove -m64, set ARCH = osx_arm64
+make OSX_ARM64_config
+make libtrdp
+gcc -dynamiclib -fPIC -o bld/output/osx_arm64-rel/libtrdp.dylib \
+    bld/output/osx_arm64-rel/*.o -lpthread
+```
+
+Alternatively, you can open `TRDP/3.0.0.0/Xcode/trdp.xcodeproj` in Xcode and build
+the library target from the IDE.
+
+---
+
+### Windows
+
+The repository includes a ready-to-use Visual Studio 2019 solution at
+`TRDP/3.0.0.0/VSExpress2019/Win_TRDP_VS2019.sln`.
+
+**Prerequisites:** Visual Studio 2019 (or later) with the **Desktop development with
+C++** workload installed.
+
+#### Build via Visual Studio IDE
+
+1. Open `VSExpress2019/Win_TRDP_VS2019.sln`.
+2. Select the **TRDP_DLL** project in Solution Explorer.
+3. Choose the desired configuration (`Debug` or `Release`) and platform (`x64`).
+4. Build → Build Solution (`Ctrl+Shift+B`).
+
+The output DLL is placed in  
+`VSExpress2019/TRDP_DLL/x64/Release/TRDP_DLL.dll` (Release)  
+or  `VSExpress2019/TRDP_DLL/x64/Debug/TRDP_DLL.dll` (Debug).
+
+The project already defines the required preprocessor macros:
+- `WIN32` / `WIN64`
+- `MD_SUPPORT=1`
+- `L_ENDIAN`
+- `DLL_EXPORT` (triggers `__declspec(dllexport)` on all public symbols)
+
+#### Build from the command line (MSBuild)
+
+```bat
+:: Open a "Developer Command Prompt for VS 2019" or run vcvars64.bat first
+
+cd TRDP\3.0.0.0\VSExpress2019
+
+msbuild Win_TRDP_VS2019.sln ^
+    /t:TRDP_DLL ^
+    /p:Configuration=Release ^
+    /p:Platform=x64
+```
+
+#### Making JNA find the DLL
+
+JNA looks for `trdp.dll` on the Java library path. The DLL produced by the VS project
+is named `TRDP_DLL.dll` — either rename it or tell JNA the exact name when constructing
+the session:
+
+```java
+// Pass the exact DLL base name (without extension) to TrdpSession / TrdpTemplate
+TrdpTemplate t = TrdpTemplate.builder()
+    .ownIp("10.0.1.1")
+    .libName("TRDP_DLL")   // ← matches TRDP_DLL.dll
+    .build();
+```
+
+Alternatively, copy `TRDP_DLL.dll` to a directory on `PATH`, or pass
+`-Djna.library.path=C:\path\to\dll` to the JVM.
+
+---
+
+### Pointing the Java library at the built file
+
+Once you have the shared library, tell JNA where to find it using one of:
+
+| Method | How |
+|---|---|
+| Install system-wide | Copy to `/usr/local/lib/` (Linux/macOS) and run `ldconfig` |
+| JVM property | `-Djna.library.path=/path/to/dir/containing/libtrdp.so` |
+| `TrdpTemplate.builder().libName(name)` | Pass the base name if it differs from `"trdp"` |
+| `TrdpSession` constructor | 4th argument is the library base name |
+
+---
+
+## Building the Java wrapper
 
 ```bash
 mvn package
