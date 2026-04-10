@@ -97,13 +97,23 @@ try (TrdpSession s = new TrdpSession("10.0.1.1")) {
 
 ```
 io.trdp/
-├── TrdpSession.java     High-level session API (main entry point)
-├── TrdpLibrary.java     Raw JNA mapping of the C API (low-level)
-├── TrdpErrCode.java     Enum of all TRDP_ERR_T error codes
-├── TrdpException.java   RuntimeException wrapping a TRDP error code
-├── PdInfo.java          Metadata from a received PD telegram
-├── MdInfo.java          Metadata from a received MD telegram
-└── Statistics.java      Session / per-sub / per-pub statistics
+├── TrdpSession.java          High-level session API (main entry point)
+├── TrdpLibrary.java          Raw JNA mapping of the C API (low-level)
+├── TrdpErrCode.java          Enum of all TRDP_ERR_T error codes
+├── TrdpException.java        RuntimeException wrapping a TRDP error code
+├── PdInfo.java               Metadata from a received PD telegram
+├── MdInfo.java               Metadata from a received MD telegram
+├── Statistics.java           Session / per-sub / per-pub statistics
+└── template/
+    ├── TrdpTemplate.java     Fluent template — creates typed publishers & subscribers
+    │   ├── PublisherBuilder<T>   Builder for TrdpPublisher<T>
+    │   └── SubscriberBuilder<T>  Builder for TrdpSubscriber<T>
+    ├── TrdpPublisher<T>.java     Typed PD publisher handle
+    ├── TrdpSubscriber<T>.java    Typed PD subscriber handle (push + pull)
+    ├── TrdpMdTemplate.java       MD operations with CompletableFuture support
+    ├── MdListenerHandle.java     AutoCloseable MD listener handle
+    ├── TrdpSerializer<T>.java    Serializer interface + bytes() / string() factories
+    └── TrdpDeserializer<T>.java  Deserializer interface + bytes() / string() factories
 ```
 
 ---
