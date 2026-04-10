@@ -3,6 +3,13 @@
 Java wrapper for **TCNOpen TRDP Light** (v3.0.0.0) built on top of [JNA](https://github.com/java-native-access/jna).  
 Provides idiomatic Java access to the full TRDP PD + MD + statistics API without writing any JNI code.
 
+Two API levels are available:
+
+| Level | Package | Analogy |
+|-------|---------|---------|
+| **Template API** (recommended) | `io.trdp.template` | Spring Kafka `KafkaTemplate` / `KafkaListenerContainer` |
+| **Session API** (low-level) | `io.trdp` | Raw Kafka producer / consumer clients |
+
 ---
 
 ## Requirements
@@ -645,3 +652,326 @@ try (TrdpSession requester = new TrdpSession("10.0.1.1");
 ```
 
 > **Note:** in a real application the replier gets the `sessionId` from the `MdInfo` object delivered to the listener callback (`info` parameter). The `MdInfo.sessionId` field is the 16-byte UUID to pass back to `mdReply`.
+
+---
+
+---
+
+## Template API (`io.trdp.template`)
+
+The template layer sits on top of `TrdpSession` and provides:
+
+- **Generics** — publishers and subscribers are typed (`TrdpPublisher<T>`, `TrdpSubscriber<T>`).
+- **Fluent builders** — configure everything in one chain.
+- **Pluggable serialization** — `TrdpSerializer<T>` / `TrdpDeserializer<T>` functional interfaces with built-in factories for `byte[]` and `String`.
+- **Push and pull** — register an `onMessage` callback (push) or call `poll()` / `receive()` (pull).
+- **`CompletableFuture`-based MD requests** — `TrdpMdTemplate.asyncRequest(...)` integrates cleanly with Java async pipelines.
+
+### Package layout
+
+```
+io.trdp.template/
+├── TrdpTemplate.java          Main template — creates publishers and subscribers
+│   ├── PublisherBuilder<T>    Fluent builder for TrdpPublisher<T>
+│   └── SubscriberBuilder<T>   Fluent builder for TrdpSubscriber<T>
+├── TrdpPublisher<T>.java      Typed publisher handle (send / sendImmediate / close)
+├── TrdpSubscriber<T>.java     Typed subscriber handle (poll / receive / close)
+├── TrdpMdTemplate.java        MD operations: notify, request, asyncRequest, addListener
+├── MdListenerHandle.java      AutoCloseable MD listener handle
+├── TrdpSerializer<T>.java     Serializer interface + bytes() / string() factories
+└── TrdpDeserializer<T>.java   Deserializer interface + bytes() / string() factories
+```
+
+---
+
+### `TrdpTemplate`
+
+#### Creating a self-managed instance
+
+```java
+// Template owns the session — constructor opens it, close() shuts it down
+try (TrdpTemplate t = TrdpTemplate.builder()
+        .ownIp("10.0.1.1")           // required
+        .leaderIp("0.0.0.0")         // optional, default 0.0.0.0
+        .libName("trdp")             // optional, default "trdp"
+        .pollPeriodMs(10)            // optional, default 10 ms
+        .build()) {
+    // ...
+}
+```
+
+#### Wrapping an existing session
+
+```java
+// Template borrows the session — close() does NOT close the session
+TrdpTemplate t = new TrdpTemplate(existingSession);
+TrdpTemplate t = new TrdpTemplate(existingSession, 5 /*pollPeriodMs*/);
+```
+
+#### Lifecycle
+
+| Method | Description |
+|--------|-------------|
+| `start()` | Start the background daemon processing thread. |
+| `stop()` | Stop it. |
+| `close()` | Stop + close session (if owned). |
+| `getSession()` | Access the raw `TrdpSession` for advanced use. |
+
+---
+
+### `TrdpPublisher<T>`
+
+Returned by `TrdpTemplate.PublisherBuilder.register()`.
+
+```java
+TrdpPublisher<String> pub = template
+    .publisher(TrdpSerializer.string())   // or .stringPublisher()
+    .comId(1000)
+    .dest("239.192.0.0")
+    .intervalMs(100)           // or .intervalUs(100_000)
+    .src("0.0.0.0")            // optional
+    .redId(0)                  // optional — redundancy group
+    .initialValue("init")      // optional — pre-load payload
+    .register();
+
+pub.send("hello");             // queued for next cycle
+pub.sendImmediate("urgent");   // sent immediately
+pub.close();                   // stop publishing
+```
+
+**`PublisherBuilder` options**
+
+| Method | Default | Description |
+|--------|---------|-------------|
+| `comId(int)` | — | Communication identifier (required) |
+| `dest(String)` | — | Destination IP (required) |
+| `intervalUs(int)` | — | Publish period µs (required, or use `intervalMs`) |
+| `intervalMs(int)` | — | Publish period ms |
+| `src(String)` | `"0.0.0.0"` | Source IP |
+| `redId(int)` | `0` | Redundancy group ID |
+| `serviceId(int)` | `0` | Service ID |
+| `etbTopoCnt(int)` | `0` | ETB topology counter |
+| `opTrnTopoCnt(int)` | `0` | Op-train topology counter |
+| `flags(byte)` | `FLAGS_DEFAULT` | Packet flags |
+| `initialValue(T)` | empty | Initial payload |
+
+---
+
+### `TrdpSubscriber<T>`
+
+Returned by `TrdpTemplate.SubscriberBuilder.register()`.
+
+#### Push style (callback)
+
+```java
+TrdpSubscriber<String> sub = template
+    .subscriber(TrdpDeserializer.string())   // or .stringSubscriber()
+    .comId(2000)
+    .src("10.0.1.2")           // optional, default any
+    .timeoutMs(500)            // or .timeoutUs(500_000)
+    .keepLastOnTimeout()       // optional: keep / zero / default
+    .onMessage((info, msg) -> System.out.println(info.srcIp + ": " + msg))
+    .register();
+// callback fires on processing thread — don't block inside it
+```
+
+#### Pull style (polling)
+
+```java
+TrdpSubscriber<String> sub = template
+    .stringSubscriber()
+    .comId(2000).src("0.0.0.0").timeoutMs(500)
+    .register();
+
+// poll: returns null if no data yet
+String latest = sub.poll();
+
+// receive: returns Optional with metadata
+sub.receive().ifPresent(e -> {
+    PdInfo info = e.getKey();
+    String msg  = e.getValue();
+    System.out.printf("from %s: %s%n", info.srcIp, msg);
+});
+
+sub.close();
+```
+
+**`SubscriberBuilder` options**
+
+| Method | Default | Description |
+|--------|---------|-------------|
+| `comId(int)` | — | Communication identifier (required) |
+| `src(String)` | `"0.0.0.0"` | Source IP filter (any) |
+| `srcRange(String, String)` | — | Source IP range |
+| `dest(String)` | `"0.0.0.0"` | Multicast group (unicast if omitted) |
+| `timeoutUs(int)` | `0` | Receive timeout µs (0 = infinite) |
+| `timeoutMs(int)` | `0` | Receive timeout ms |
+| `keepLastOnTimeout()` | — | Keep last value on timeout |
+| `zeroOnTimeout()` | — | Zero buffer on timeout |
+| `serviceId(int)` | `0` | Service ID |
+| `etbTopoCnt(int)` | `0` | ETB topology counter |
+| `opTrnTopoCnt(int)` | `0` | Op-train topology counter |
+| `flags(int)` | `FLAGS_DEFAULT` | Packet flags |
+| `onMessage(BiConsumer)` | none | Push-style callback |
+
+---
+
+### `TrdpSerializer<T>` / `TrdpDeserializer<T>`
+
+Both are `@FunctionalInterface` — use a lambda or a method reference for custom types.
+
+```java
+// Built-in factories
+TrdpSerializer<byte[]>  rawSer  = TrdpSerializer.bytes();
+TrdpSerializer<String>  strSer  = TrdpSerializer.string();          // UTF-8
+TrdpSerializer<String>  lat1Ser = TrdpSerializer.string(ISO_8859_1);
+
+TrdpDeserializer<byte[]> rawDes = TrdpDeserializer.bytes();
+TrdpDeserializer<String> strDes = TrdpDeserializer.string();
+
+// Custom — Jackson JSON example
+TrdpSerializer<MyDto>   jsonSer = value -> objectMapper.writeValueAsBytes(value);
+TrdpDeserializer<MyDto> jsonDes = data  -> objectMapper.readValue(data, MyDto.class);
+```
+
+---
+
+### `TrdpMdTemplate`
+
+#### Setup
+
+```java
+TrdpMdTemplate md = new TrdpMdTemplate(template);   // shares session
+// or
+TrdpMdTemplate md = new TrdpMdTemplate(session);
+```
+
+#### Notify (fire and forget)
+
+```java
+md.notify(3000, "10.0.1.2", "ping".getBytes());
+
+// typed
+md.notify(3000, "10.0.1.2", myDto, jsonSerializer);
+```
+
+#### Async request — `CompletableFuture`
+
+```java
+// Raw bytes
+md.asyncRequest(3000, "10.0.1.2", "ping".getBytes(), /*timeoutMs*/ 1_000)
+  .thenAccept(reply -> System.out.println(new String(reply)))
+  .exceptionally(ex -> { System.err.println(ex.getMessage()); return null; });
+
+// Typed
+CompletableFuture<String> f = md.asyncRequest(
+    3000, "10.0.1.2",
+    "ping",                          // REQ value
+    TrdpSerializer.string(),         // REQ serializer
+    TrdpDeserializer.string(),       // REP deserializer
+    1_000);
+f.thenAccept(System.out::println);
+```
+
+The future completes exceptionally with `TimeoutException` if the timeout fires first.
+
+#### Synchronous request (callback)
+
+```java
+byte[] sessionId = md.request(3000, "10.0.1.2", "ping".getBytes(),
+    (info, data) -> System.out.println("reply: " + new String(data)));
+```
+
+#### Reply (server side)
+
+```java
+// Inside a listener callback — info.sessionId is the UUID to reply to
+md.reply(info.sessionId, 3001, "pong".getBytes());
+
+// With explicit confirmation required
+md.replyQuery(info.sessionId, 3001, "pong".getBytes(), /*confirmTimeoutUs*/ 500_000);
+
+// Confirm a reply (requester side)
+md.confirm(sessionId, /*userStatus*/ 0);
+
+// Abort
+md.abort(sessionId);
+```
+
+#### Listener
+
+```java
+// Typed listener — AutoCloseable
+try (MdListenerHandle h = md.addListener(3000,
+        TrdpDeserializer.string(),
+        (info, msg) -> {
+            System.out.println("request from " + info.srcIp + ": " + msg);
+            md.reply(info.sessionId, 3001, "pong".getBytes());
+        })) {
+    Thread.sleep(30_000);
+} // listener removed here
+
+// Raw bytes listener
+MdListenerHandle h = md.addListener(3000,
+    (info, data) -> System.out.println(data.length + " bytes from " + info.srcIp));
+h.close(); // explicit removal
+```
+
+---
+
+### Complete template example
+
+```java
+import io.trdp.template.*;
+
+public class TrdpDemo {
+    public static void main(String[] args) throws Exception {
+
+        // ── Publisher side ────────────────────────────────────────────────────
+        try (TrdpTemplate producer = TrdpTemplate.builder()
+                .ownIp("10.0.1.1").pollPeriodMs(5).build()) {
+
+            TrdpPublisher<String> pub = producer.stringPublisher()
+                .comId(1000).dest("239.192.0.0").intervalMs(100)
+                .register();
+
+            producer.start();
+
+            for (int i = 0; i < 50; i++) {
+                pub.send("message-" + i);
+                Thread.sleep(100);
+            }
+        }
+
+        // ── Subscriber side ───────────────────────────────────────────────────
+        try (TrdpTemplate consumer = TrdpTemplate.builder()
+                .ownIp("10.0.1.2").pollPeriodMs(5).build()) {
+
+            consumer.stringSubscriber()
+                .comId(1000).src("10.0.1.1").timeoutMs(500)
+                .onMessage((info, msg) ->
+                    System.out.printf("[%s] %s%n", info.srcIp, msg))
+                .register();
+
+            consumer.start();
+            Thread.sleep(5_000);
+        }
+
+        // ── MD request / reply ────────────────────────────────────────────────
+        try (TrdpTemplate t = TrdpTemplate.builder().ownIp("10.0.1.1").build()) {
+            TrdpMdTemplate md = new TrdpMdTemplate(t);
+
+            // Server: register a listener that replies
+            md.addListener(3000, TrdpDeserializer.string(),
+                (info, req) -> md.reply(info.sessionId, 3001, ("echo: " + req).getBytes()));
+
+            // Client: async request
+            md.asyncRequest(3000, "10.0.1.1", "hello".getBytes(), 1_000)
+              .thenAccept(r -> System.out.println(new String(r)));
+
+            t.start();
+            Thread.sleep(2_000);
+        }
+    }
+}
+```
