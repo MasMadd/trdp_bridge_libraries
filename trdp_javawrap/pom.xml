@@ -14,7 +14,7 @@
 
     <properties>
         <java.version>11</java.version>
-        <!-- default: empty → Release build; set -Dnative.debug=true to pass --debug -->
+        <!-- default: empty = Release build; set -Dnative.debug=true to pass the -debug flag -->
         <native.debug.arg></native.debug.arg>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
@@ -139,7 +139,7 @@
                                         <exec osfamily="unix"
                                               executable="${project.basedir}/scripts/build-native-unix.sh"
                                               failonerror="true">
-                                            <arg value="${native.debug.flag}"/>
+                                            <arg value="${native.debug.arg}"/>
                                         </exec>
 
                                         <!-- Windows -->
@@ -148,7 +148,7 @@
                                               failonerror="true">
                                             <arg value="/c"/>
                                             <arg value="${project.basedir}\scripts\build-native-win.bat"/>
-                                            <arg value="${native.debug.flag}"/>
+                                            <arg value="${native.debug.arg}"/>
                                         </exec>
                                     </target>
                                 </configuration>
@@ -160,7 +160,7 @@
 
         </profile>
 
-        <!-- Activated by -Dnative.debug=true: passes --debug to the build scripts -->
+        <!-- Activated by -Dnative.debug=true: passes debug to the build scripts -->
         <profile>
             <id>native-debug</id>
             <activation>

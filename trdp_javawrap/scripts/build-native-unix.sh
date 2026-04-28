@@ -25,7 +25,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 JAVA_PROJECT="$(dirname "$SCRIPT_DIR")"
-TRDP_ROOT="$(dirname "$(dirname "$JAVA_PROJECT")")/TRDP/3.0.0.0"
+TRDP_ROOT="$(dirname "$JAVA_PROJECT")/TRDP/3.0.0.0"
 RESOURCES_BASE="$JAVA_PROJECT/src/main/resources/com/sun/jna"
 
 DEBUG_BUILD=0

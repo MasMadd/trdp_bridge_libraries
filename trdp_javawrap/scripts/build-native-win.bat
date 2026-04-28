@@ -35,9 +35,11 @@ set RESOURCES_DIR=%JAVA_PROJECT%\src\main\resources\com\sun\jna\win32-x86-64
 set CONFIGURATION=Release
 if /I "%~1"=="--debug" set CONFIGURATION=Debug
 
-echo =^> Build configuration: %CONFIGURATION%
+echo =^>Build configuration: %CONFIGURATION%
 
-:: ── Locate MSBuild ─────────────────────────────────────────────────────────
+:: --------------------------------------------------------------------------
+:: Locate MSBuild
+:: --------------------------------------------------------------------------
 
 set MSBUILD=
 
@@ -46,13 +48,17 @@ for /f "tokens=*" %%i in ('where msbuild 2^>nul') do (
     if not defined MSBUILD set "MSBUILD=%%i"
 )
 
-:: Search known VS2022 paths
+:: Search known VS2022 paths (64-bit and 32-bit Program Files)
 if not defined MSBUILD (
     for %%p in (
         "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe"
         "C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe"
         "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
         "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+        "C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe"
+        "C:\Program Files (x86)\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe"
+        "C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe"
+        "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
     ) do (
         if not defined MSBUILD if exist %%p set "MSBUILD=%%~p"
     )
@@ -74,14 +80,16 @@ if not defined MSBUILD (
     echo ERROR: MSBuild not found.
     echo Install Visual Studio 2019/2022 with "Desktop development with C++" workload,
     echo or install "Build Tools for Visual Studio" from:
-    echo https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022
+    echo https://visualstudio.microsoft.com/downloads/
     exit /b 1
 )
 
-echo =^> MSBuild : %MSBUILD%
-echo =^> Solution: %SLN%
+echo =^>MSBuild : %MSBUILD%
+echo =^>Solution: %SLN%
 
-:: ── Build the DLL ──────────────────────────────────────────────────────────
+:: --------------------------------------------------------------------------
+:: Build the DLL
+:: --------------------------------------------------------------------------
 
 "%MSBUILD%" "%SLN%" ^
     /t:%TRDP_DLL_PROJECT% ^
@@ -96,7 +104,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: ── Locate the produced DLL ────────────────────────────────────────────────
+:: --------------------------------------------------------------------------
+:: Locate the produced DLL
+:: --------------------------------------------------------------------------
 :: The VS project may name the output SimTRDP_DLL.dll, TRDP_DLLSim.dll, or
 :: TRDP_DLL.dll depending on the active configuration's TargetName property.
 :: We find the most recently written .dll in the output directory.
@@ -114,9 +124,11 @@ if not defined FOUND_DLL (
     exit /b 1
 )
 
-echo =^> Built DLL : %FOUND_DLL%
+echo =^>Built DLL : %FOUND_DLL%
 
-:: ── Copy to JNA resource path ──────────────────────────────────────────────
+:: --------------------------------------------------------------------------
+:: Copy to JNA resource path
+:: --------------------------------------------------------------------------
 :: JNA looks for  com/sun/jna/win32-x86-64/trdp.dll  inside the JAR.
 :: The DLL is renamed to "trdp.dll" to match the libName used in Native.load().
 
@@ -129,7 +141,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo =^> Done. Library installed at:
+echo =^>Done. Library installed at:
 echo     %RESOURCES_DIR%\trdp.dll
 echo.
 echo     JNA will auto-extract and load it on win32-x86-64 at runtime.
