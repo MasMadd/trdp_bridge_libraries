@@ -14,6 +14,8 @@
 
     <properties>
         <java.version>11</java.version>
+        <!-- default: empty → Release build; set -Dnative.debug=true to pass --debug -->
+        <native.debug.arg></native.debug.arg>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -96,6 +98,89 @@
         locate it via System.getProperty("trdp.native.lib").
     -->
     <profiles>
+        <!--
+            ── Native build profile ─────────────────────────────────────────────
+            Compiles libtrdp for the current OS/arch and copies it into the JNA
+            auto-extraction resource tree so the final JAR is self-contained.
+
+            Usage:
+              Linux / macOS : mvn package -Pnative
+              Windows       : mvn package -Pnative
+              Debug build   : mvn package -Pnative -Dnative.debug=true
+
+            The script auto-detects the platform, runs the TRDP Makefile (Unix) or
+            MSBuild (Windows), links the shared library, and drops it under:
+              src/main/resources/com/sun/jna/<jna-platform>/libtrdp.{so,dylib,dll}
+
+            JNA reads Platform.RESOURCE_PREFIX at runtime, extracts the matching
+            library from the JAR to a temp directory, and loads it — zero
+            configuration for the consumer of the resulting artifact.
+        -->
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>build-native</id>
+                                <phase>generate-resources</phase>
+                                <goals><goal>run</goal></goals>
+                                <configuration>
+                                    <target>
+                                        <!-- Make the shell script executable on Unix -->
+                                        <chmod osfamily="unix"
+                                               file="${project.basedir}/scripts/build-native-unix.sh"
+                                               perm="755"/>
+
+                                        <!-- Unix (Linux + macOS) -->
+                                        <exec osfamily="unix"
+                                              executable="${project.basedir}/scripts/build-native-unix.sh"
+                                              failonerror="true">
+                                            <arg value="${native.debug.flag}"/>
+                                        </exec>
+
+                                        <!-- Windows -->
+                                        <exec osfamily="windows"
+                                              executable="cmd"
+                                              failonerror="true">
+                                            <arg value="/c"/>
+                                            <arg value="${project.basedir}\scripts\build-native-win.bat"/>
+                                            <arg value="${native.debug.flag}"/>
+                                        </exec>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+
+        </profile>
+
+        <!-- Activated by -Dnative.debug=true: passes --debug to the build scripts -->
+        <profile>
+            <id>native-debug</id>
+            <activation>
+                <property>
+                    <name>native.debug</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <properties>
+                <native.debug.arg>--debug</native.debug.arg>
+            </properties>
+        </profile>
+
+        <!-- ── Integration-test profile ────────────────────────────────────────── -->
+        <!--
+            Run with:  mvn verify -Pintegration-test -Dtrdp.native.lib=/path/to/libtrdp.so
+            This profile activates Failsafe to execute @Tag("integration") tests.
+            The native library path is forwarded as a system property so tests can
+            locate it via System.getProperty("trdp.native.lib").
+        -->
         <profile>
             <id>integration-test</id>
             <build>

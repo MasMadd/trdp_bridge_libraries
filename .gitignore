@@ -23,3 +23,11 @@
 hs_err_pid*
 replay_pid*
 trdp_javawrap/.idea
+
+trdp_javawrap/target/
+
+# Native libraries produced by -Pnative — never commit binaries to git.
+# Run  mvn package -Pnative  on each target platform to (re)generate them.
+trdp_javawrap/src/main/resources/com/sun/jna/**/*.so
+trdp_javawrap/src/main/resources/com/sun/jna/**/*.dylib
+trdp_javawrap/src/main/resources/com/sun/jna/**/*.dll

@@ -1,0 +1,7 @@
+target/
+
+# Native libraries produced by -Pnative — never commit binaries to git.
+# Run  mvn package -Pnative  on each target platform to (re)generate them.
+src/main/resources/com/sun/jna/**/*.so
+src/main/resources/com/sun/jna/**/*.dylib
+src/main/resources/com/sun/jna/**/*.dll

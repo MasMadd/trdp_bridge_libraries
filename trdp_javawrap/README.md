@@ -192,9 +192,110 @@ Once you have the shared library, tell JNA where to find it using one of:
 
 ## Building the Java wrapper
 
+### Standard build (no native library bundled)
+
 ```bash
 mvn package
 ```
+
+Produces `target/trdp-java-0.1.0.jar`. The native library must be installed
+separately on any machine that runs the application (see
+[Pointing the Java library at the built file](#pointing-the-java-library-at-the-built-file)).
+
+---
+
+### Self-contained build (native library bundled inside the JAR)
+
+Running with the `native` Maven profile compiles `libtrdp` for the current
+platform, then packs the resulting binary directly inside the JAR.
+The consumer of the artifact needs **zero configuration** — no environment
+variable, no `jna.library.path`, no separate installation step.
+
+```bash
+# Release build — Linux, macOS, or Windows
+mvn package -Pnative
+
+# Debug build
+mvn package -Pnative -Dnative.debug=true
+```
+
+What the profile does internally:
+
+1. Runs `scripts/build-native-unix.sh` (Linux/macOS) or
+   `scripts/build-native-win.bat` (Windows) via the Ant `<exec>` task.
+2. The script selects the right TRDP config for the detected OS + arch,
+   runs `make libtrdp`, then links a shared library.
+3. The resulting file is copied to:
+   ```
+   src/main/resources/com/sun/jna/<jna-platform>/libtrdp.{so,dylib,dll}
+   ```
+4. `mvn package` includes those resources in the JAR normally.
+
+#### How JNA finds the right binary at runtime
+
+JNA evaluates `com.sun.jna.Platform.RESOURCE_PREFIX` once at load time.
+This property is derived from the running JVM's `os.name` and `os.arch`
+system properties and produces strings such as:
+
+| OS / arch | `RESOURCE_PREFIX` | Library file in JAR |
+|---|---|---|
+| Linux x86-64 | `linux-x86-64` | `com/sun/jna/linux-x86-64/libtrdp.so` |
+| Linux ARM 64-bit | `linux-aarch64` | `com/sun/jna/linux-aarch64/libtrdp.so` |
+| macOS x86-64 | `darwin-x86-64` | `com/sun/jna/darwin-x86-64/libtrdp.dylib` |
+| macOS Apple Silicon | `darwin-aarch64` | `com/sun/jna/darwin-aarch64/libtrdp.dylib` |
+| Windows x86-64 | `win32-x86-64` | `com/sun/jna/win32-x86-64/trdp.dll` |
+
+JNA then:
+
+1. Locates `com/sun/jna/<RESOURCE_PREFIX>/libtrdp.<ext>` in the classpath.
+2. Extracts it to a temporary directory (e.g. `/tmp/jna-<pid>/`).
+3. Loads it with the OS native loader.
+
+This is completely transparent to the Java code — `Native.load("trdp", TrdpLibrary.class)`
+works the same way regardless of whether the library was bundled or installed system-wide.
+
+If the bundled binary is not found (e.g. a platform not covered by the JAR),
+JNA falls back to the system library search path as usual.
+
+#### Building a multi-platform JAR
+
+A single `mvn package -Pnative` run bundles only the library for the current
+OS. To produce a JAR that works on all platforms without any native install,
+build on each target OS and merge the resources before the final `mvn package`:
+
+```
+Linux   →  target/classes/com/sun/jna/linux-x86-64/libtrdp.so
+macOS   →  target/classes/com/sun/jna/darwin-x86-64/libtrdp.dylib
+           target/classes/com/sun/jna/darwin-aarch64/libtrdp.dylib
+Windows →  target/classes/com/sun/jna/win32-x86-64/trdp.dll
+```
+
+The typical CI approach (e.g. GitHub Actions) is:
+
+1. Run `mvn package -Pnative -DskipTests` on a Linux runner → collect `libtrdp.so`.
+2. Run the same on a macOS runner → collect `libtrdp.dylib` (x86-64 + arm64).
+3. Run the same on a Windows runner → collect `trdp.dll`.
+4. On a final assembly job, copy all binaries into the resource tree and run
+   `mvn package` once more to produce the fat JAR.
+
+#### Project layout for native resources
+
+```
+trdp_javawrap/
+├── scripts/
+│   ├── build-native-unix.sh    ← Linux + macOS build script
+│   └── build-native-win.bat    ← Windows (MSBuild) build script
+└── src/main/resources/
+    └── com/sun/jna/
+        ├── linux-x86-64/       libtrdp.so     (generated, git-ignored)
+        ├── linux-aarch64/      libtrdp.so     (generated, git-ignored)
+        ├── darwin-x86-64/      libtrdp.dylib  (generated, git-ignored)
+        ├── darwin-aarch64/     libtrdp.dylib  (generated, git-ignored)
+        └── win32-x86-64/       trdp.dll       (generated, git-ignored)
+```
+
+The directories are tracked in git (via `.gitkeep`); the compiled binaries are
+`.gitignore`d and must be regenerated locally with `mvn package -Pnative`.
 
 This produces two JARs under `target/`:
 
